@@ -1,0 +1,160 @@
+# Dockerfile for AMD Ryzen AI NPUs (Vitis-AI)
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    cmake \
+    build-essential \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    wget \
+    libboost-all-dev \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    uuid-dev \
+    libncurses5-dev \
+    libx11-dev \
+    libxext-dev \
+    libxml2-dev \
+    libyaml-dev \
+    pkg-config \
+    lsb-release \
+    sudo \
+    cpio \
+    jq \
+    libdrm-dev \
+    libudev-dev \
+    libsystemd-dev \
+    python3-setuptools \
+    libgoogle-glog-dev \
+    libprotoc-dev \
+    protobuf-compiler \
+    libjson-c-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone xdna-driver (includes XRT submodule)
+RUN git clone --recursive https://github.com/amd/xdna-driver.git
+
+# Build XRT from the submodule
+WORKDIR /build/xdna-driver/xrt/build
+RUN ./build.sh -npu -opt && \
+    cd Release && \
+    apt-get install -y ./*.deb
+
+# Build XDNA driver (shim/plugin)
+WORKDIR /build/xdna-driver/build
+RUN ./build.sh -release && \
+    cd Release && \
+    apt-get install -y ./*.deb
+
+# Download NPU firmware (xclbin)
+RUN mkdir -p /opt/xclbins && \
+    cp -r /build/xdna-driver/build/amdxdna_bins/firmware/* /opt/xclbins/
+
+# Build Vitis-AI SDK components
+WORKDIR /build
+RUN git clone --recursive https://github.com/Xilinx/Vitis-AI.git
+WORKDIR /build/Vitis-AI/src/Vitis-AI-Runtime/VART
+
+# Build unilog (dependency for XIR/VART)
+WORKDIR /build/Vitis-AI/src/Vitis-AI-Runtime/VART/unilog
+RUN mkdir build && cd build && \
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr && \
+    make -j$(nproc) && \
+    make install
+
+# Build target_factory (dependency for XIR/VART)
+WORKDIR /build/Vitis-AI/src/Vitis-AI-Runtime/VART/target_factory
+RUN mkdir build && cd build && \
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr && \
+    make -j$(nproc) && \
+    make install
+
+# Build XIR
+WORKDIR /build/Vitis-AI/src/Vitis-AI-Runtime/VART/xir
+RUN mkdir build && cd build && \
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr && \
+    make -j$(nproc) && \
+    make install
+
+# Build VART
+WORKDIR /build/Vitis-AI/src/Vitis-AI-Runtime/VART/vart
+RUN mkdir build && cd build && \
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr && \
+    make -j$(nproc) && \
+    make install
+
+# Build PyXIR (required for Vitis-AI EP)
+WORKDIR /build
+RUN git clone --recursive https://github.com/Xilinx/pyxir.git
+WORKDIR /build/pyxir
+RUN python3 setup.py install --use_vai_rt
+
+# Build ONNX Runtime with Vitis-AI support
+WORKDIR /build
+RUN git clone --recursive --branch v1.20.0 https://github.com/microsoft/onnxruntime.git
+WORKDIR /build/onnxruntime
+RUN ./build.sh --config Release --build_wheel --update --build --parallel --use_vitisai
+
+# Final Stage
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    lsb-release \
+    libboost-system1.83.0 \
+    libboost-filesystem1.83.0 \
+    libxml2 \
+    wget \
+    libgoogle-glog0v6 \
+    libprotobuf32v0 \
+    libjson-c5 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy XRT and XDNA artifacts from builder
+COPY --from=builder /build/xdna-driver/xrt/build/Release/*.deb /tmp/xrt/
+COPY --from=builder /build/xdna-driver/build/Release/*.deb /tmp/xrt/
+RUN apt-get update && apt-get install -y /tmp/xrt/*.deb && rm -rf /tmp/xrt
+
+# Copy Vitis-AI Runtime libraries
+COPY --from=builder /usr/lib/libxir* /usr/lib/
+COPY --from=builder /usr/lib/libvart* /usr/lib/
+COPY --from=builder /usr/lib/libunilog* /usr/lib/
+COPY --from=builder /usr/lib/libtarget_factory* /usr/lib/
+COPY --from=builder /usr/local/lib/python3.12/dist-packages/pyxir* /usr/local/lib/python3.12/dist-packages/
+
+# Copy xclbin files
+COPY --from=builder /opt/xclbins /opt/xclbins
+
+# Copy ONNX Runtime wheel from builder and install
+COPY --from=builder /build/onnxruntime/build/Linux/Release/dist/*.whl /tmp/
+RUN pip3 install --no-cache-dir --break-system-packages /tmp/*.whl && rm -rf /tmp/*.whl
+
+COPY requirements.txt .
+RUN grep -v "onnxruntime" requirements.txt > requirements_vitisai.txt && \
+    pip3 install --no-cache-dir --break-system-packages -r requirements_vitisai.txt
+
+COPY detector/ ./detector/
+
+# Set XRT environment variables
+ENV XILINX_XRT=/opt/xilinx/xrt
+ENV LD_LIBRARY_PATH=$XILINX_XRT/lib:/usr/lib:$LD_LIBRARY_PATH
+ENV PATH=$XILINX_XRT/bin:$PATH
+
+ENTRYPOINT ["python3", "detector/zmq_onnx_client.py"]
+CMD ["--endpoint", "tcp://*:5555", "--model", "AUTO"]
