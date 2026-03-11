@@ -1,13 +1,13 @@
 # Dockerfile for Intel CPUs/GPUs and NPUs (OpenVINO)
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y \
-    python3.11 \
+    python3.12 \
     python3-pip \
-    python3.11-venv \
+    python3.12-venv \
     libgl1-mesa-glx \
     libglib2.0-0 \
     libtbb12 \
@@ -22,5 +22,5 @@ RUN sed -i 's/onnxruntime==/onnxruntime-openvino==/' requirements.txt && \
 
 COPY detector/ ./detector/
 
-ENTRYPOINT ["python3.11", "detector/zmq_onnx_client.py"]
+ENTRYPOINT ["python3.12", "detector/zmq_onnx_client.py"]
 CMD ["--endpoint", "tcp://*:5555", "--model", "AUTO"]

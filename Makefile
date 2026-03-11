@@ -54,3 +54,10 @@ docker-build-rocm:
 
 docker-run:
 	docker run --rm -it $(DOCKER_IMAGE_NAME):$(DOCKER_TAG)
+
+# Verification
+verify-openvino:
+	pip uninstall -y onnxruntime || true
+	sed -i 's/onnxruntime==/onnxruntime-openvino==/' requirements.txt
+	pip install -r requirements.txt
+	python3 test/test_e2e.py
