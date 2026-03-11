@@ -101,7 +101,11 @@ RUN python3 setup.py install --use_vai_rt
 WORKDIR /build
 RUN git clone --recursive --branch v1.20.0 https://github.com/microsoft/onnxruntime.git
 WORKDIR /build/onnxruntime
-RUN ./build.sh --config Release --build_wheel --update --build --parallel --use_vitisai
+# Set environment variables for Vitis-AI EP build
+ENV VAI_ROOT=/usr
+ENV XILINX_XRT=/opt/xilinx/xrt
+RUN ./build.sh --config Release --build_wheel --update --build --parallel --use_vitisai \
+    --cmake_extra_defines VITIS_AI_HOME=${VAI_ROOT}
 
 # Final Stage
 FROM ubuntu:24.04
