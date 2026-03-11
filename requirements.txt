@@ -4,6 +4,7 @@ opencv-python-headless == 4.13.0.*
 opencv-contrib-python == 4.13.0.*
 
 # Object Detection
+# Standard package - suitable for macOS (CoreML) and CPU-only Linux
 onnxruntime==1.24.*
 
 # Communication

@@ -18,6 +18,7 @@ The server will continue running and waiting for requests.
 import json
 import logging
 import os
+import sys
 import time
 from typing import List, Optional, Tuple
 
@@ -32,6 +33,37 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+def get_best_providers() -> List[str]:
+    """
+    Detect and return the best available ONNX Runtime execution providers
+    in order of preference.
+    """
+    available = ort.get_available_providers()
+    logger.debug(f"Available ONNX Runtime providers: {available}")
+
+    # Priority list of providers
+    priority = [
+        "CoreMLExecutionProvider",
+        "TensorRTExecutionProvider",
+        "CUDAExecutionProvider",
+        "ROCMExecutionProvider",
+        "MIGraphXExecutionProvider",
+        "OpenVINOExecutionProvider",
+    ]
+
+    best_providers = []
+    for p in priority:
+        if p in available:
+            best_providers.append(p)
+
+    # Always include CPU as fallback
+    if "CPUExecutionProvider" not in best_providers:
+        best_providers.append("CPUExecutionProvider")
+
+    logger.info(f"Automatically selected providers: {best_providers}")
+    return best_providers
 
 
 class ZmqOnnxClient:
@@ -52,7 +84,6 @@ class ZmqOnnxClient:
             endpoint: ZMQ IPC endpoint to bind to
             model_path: Path to ONNX model file or "AUTO" for automatic model management
             providers: ONNX Runtime execution providers
-            session_options: ONNX Runtime session options
         """
         self.endpoint = endpoint
         self.model_path = model_path
@@ -62,6 +93,12 @@ class ZmqOnnxClient:
             os.path.dirname(os.path.dirname(__file__)), "models"
         )
 
+        # If providers not specified, detect best available
+        if providers is None or (len(providers) == 1 and providers[0] == "AUTO"):
+            self.providers = get_best_providers()
+        else:
+            self.providers = providers
+
         # Initialize ZMQ context and socket
         self.context = None
         self.socket = None
@@ -70,7 +107,7 @@ class ZmqOnnxClient:
         # Initialize ONNX Runtime session
         self.session = None
         if self.model_path != "AUTO":
-            self.session = self._initialize_onnx_session(providers)
+            self.session = self._initialize_onnx_session(self.providers)
 
         # Preallocate zero result for error cases
         self.zero_result = np.zeros((20, 6), dtype=np.float32)
@@ -139,15 +176,14 @@ class ZmqOnnxClient:
     def _create_onnx_session(
         self,
         model_path: str,
-        providers: Optional[List[str]] = None,
+        providers: List[str],
     ) -> Optional[ort.InferenceSession]:
         """
-        Create an ONNX Runtime session with CoreML optimizations.
+        Create an ONNX Runtime session with optimized providers.
 
         Args:
             model_path: Path to the ONNX model file
-            providers: Execution providers (e.g., ['CoreMLExecutionProvider', 'CPUExecutionProvider'])
-            session_options: Session options
+            providers: Execution providers in order of preference
 
         Returns:
             ONNX Runtime inference session or None if creation fails
@@ -156,23 +192,44 @@ class ZmqOnnxClient:
             cache_dir = os.path.join(self.models_dir, "cache")
             os.makedirs(cache_dir, exist_ok=True)
 
-            if providers is None:
-                providers = ["CoreMLExecutionProvider"]
-
-            # Configure CoreML EP with optimizations
             provider_options = []
-            if "CoreMLExecutionProvider" in providers:
-                coreml_options = {
-                    "ModelFormat": "MLProgram",  # Use MLProgram format for better performance
-                    "MLComputeUnits": "ALL",  # Use all available compute units
-                    "ModelCacheDirectory": cache_dir,
-                }
-                provider_options.append(("CoreMLExecutionProvider", coreml_options))
-
-            # Add other providers without options
             for provider in providers:
-                if provider != "CoreMLExecutionProvider":
-                    provider_options.append((provider, {}))
+                options = {}
+                if provider == "CoreMLExecutionProvider":
+                    options = {
+                        "ModelFormat": "MLProgram",
+                        "MLComputeUnits": "ALL",
+                        "ModelCacheDirectory": cache_dir,
+                    }
+                elif provider == "CUDAExecutionProvider":
+                    options = {
+                        "device_id": 0,
+                        "arena_extend_strategy": "kSameAsRequested",
+                        "gpu_mem_limit": 2 * 1024 * 1024 * 1024,  # 2GB limit example
+                        "cudnn_conv_algo_search": "DEFAULT",
+                        "do_copy_in_default_stream": True,
+                    }
+                elif provider == "TensorRTExecutionProvider":
+                    options = {
+                        "device_id": 0,
+                        "trt_max_workspace_size": 2147483648,
+                        "trt_fp16_enable": True,
+                        "trt_engine_cache_enable": True,
+                        "trt_engine_cache_path": cache_dir,
+                    }
+                elif provider == "ROCMExecutionProvider":
+                    options = {
+                        "device_id": 0,
+                        "miopen_conv_algo_search": "DEFAULT",
+                        "gpu_mem_limit": 2 * 1024 * 1024 * 1024,
+                    }
+                elif provider == "OpenVINOExecutionProvider":
+                    options = {
+                        "device_type": "AUTO",  # Automatically pick best available Intel device
+                        "cache_dir": cache_dir,
+                    }
+
+                provider_options.append((provider, options))
 
             logger.info(
                 f"Loading ONNX model with providers: {[p[0] for p in provider_options]}"
@@ -193,24 +250,28 @@ class ZmqOnnxClient:
 
         except Exception as e:
             logger.error(f"Failed to create ONNX session: {e}")
-            return None
+            # Fallback to simple initialization if optimized fails
+            try:
+                logger.info("Retrying with default provider settings...")
+                return ort.InferenceSession(model_path, providers=providers)
+            except Exception as e2:
+                logger.error(f"Fallback initialization also failed: {e2}")
+                return None
 
     def _initialize_onnx_session(
         self,
-        providers: Optional[List[str]] = None,
+        providers: List[str],
     ) -> Optional[ort.InferenceSession]:
         """
-        Initialize ONNX Runtime session with CoreML optimizations.
+        Initialize ONNX Runtime session.
 
         Args:
-            providers: Execution providers (e.g., ['CoreMLExecutionProvider', 'CPUExecutionProvider'])
-            session_options: Session options
+            providers: Execution providers
 
         Returns:
             ONNX Runtime inference session or None if no model path
         """
-        if not self.model_path:
-            logger.warning("No model path provided, ONNX inference will be skipped")
+        if not self.model_path or self.model_path == "AUTO":
             return None
 
         return self._create_onnx_session(self.model_path, providers)
@@ -231,15 +292,14 @@ class ZmqOnnxClient:
     def _load_model(
         self,
         model_name: str,
-        providers: Optional[List[str]] = None,
+        providers: List[str],
     ) -> bool:
         """
-        Load a model from the models directory with CoreML optimizations.
+        Load a model from the models directory.
 
         Args:
             model_name: Name of the model file to load
             providers: ONNX Runtime execution providers
-            session_options: ONNX Runtime session options
 
         Returns:
             True if model loaded successfully, False otherwise
@@ -516,7 +576,7 @@ class ZmqOnnxClient:
         if self._check_model_exists(model_name):
             logger.info(f"Model {model_name} exists locally")
             # Try to load the model
-            if self._load_model(model_name):
+            if self._load_model(model_name, self.providers):
                 response_header = {
                     "model_available": True,
                     "model_loaded": True,
@@ -561,7 +621,7 @@ class ZmqOnnxClient:
 
         if self._save_model(model_name, model_data):
             # Try to load the model
-            if self._load_model(model_name):
+            if self._load_model(model_name, self.providers):
                 response_header = {
                     "model_saved": True,
                     "model_loaded": True,
@@ -718,8 +778,13 @@ def main():
     parser.add_argument(
         "--providers",
         nargs="+",
-        default=["CoreMLExecutionProvider"],
-        help="ONNX Runtime execution providers",
+        default=["AUTO"],
+        help="ONNX Runtime execution providers (default: AUTO)",
+    )
+    parser.add_argument(
+        "--list-providers",
+        action="store_true",
+        help="List available ONNX Runtime execution providers and exit",
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Enable verbose logging"
@@ -729,6 +794,13 @@ def main():
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    if args.list_providers:
+        available = ort.get_available_providers()
+        print("Available ONNX Runtime execution providers:")
+        for p in available:
+            print(f"  - {p}")
+        sys.exit(0)
 
     # Create and start client
     client = ZmqOnnxClient(

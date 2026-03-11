@@ -1,86 +1,80 @@
-# Apple Silicon Detector for Frigate
+# Cross-Platform Detector for Frigate
 
-An optimized object detection client for Frigate that leverages Apple Silicon's Neural Engine for high-performance inference using ONNX Runtime. Provides seamless integration with Frigate's ZMQ detector plugin.
+An optimized object detection client for Frigate that leverages high-performance inference using ONNX Runtime. Provides seamless integration with Frigate's ZMQ detector plugin across macOS (Apple Silicon), Linux (Nvidia/AMD/Intel), and more.
 
 ## Features
 
-- **ZMQ IPC Communication**: Implements the REQ/REP protocol over IPC endpoints
+- **ZMQ IPC/TCP Communication**: Implements the REQ/REP protocol over IPC or TCP endpoints
 - **ONNX Runtime Integration**: Runs inference using ONNX models with optimized execution providers
-- **Apple Silicon Optimized**: Defaults to CoreML execution provider for optimal performance on Apple Silicon
+- **Cross-Platform Support**:
+  - **macOS**: Optimized for Apple Silicon using CoreML
+  - **Linux (Nvidia)**: High-performance inference using CUDA and TensorRT
+  - **Linux (AMD)**: GPU acceleration via ROCm and MIGraphX
+  - **Linux (Intel/NPUs)**: Optimized for Intel CPUs, GPUs, and NPUs via OpenVINO
+- **Smart Auto-Detection**: Automatically selects the best available execution provider for your hardware
 - **Error Handling**: Robust error handling with fallback to zero results
-- **Flexible Configuration**: Configurable endpoints, model paths, and execution providers
+- **Flexible Deployment**: Supports native execution or Docker containers
 
 ## Quick Start
 
-### Option A: macOS App (no terminal required)
-1. Download the latest `FrigateDetector.app.zip` from the Releases page.
-2. Unzip it and open `FrigateDetector.app` (first run: right‑click → Open to bypass Gatekeeper).
-3. A Terminal window will appear and automatically:
-   - create a local `venv/`
-   - install dependencies
-   - start the detector with `--model AUTO`
+### macOS
+1. **Option A: macOS App**
+   - Download the latest `FrigateDetector.app.zip` from the Releases page.
+   - Unzip it and open `FrigateDetector.app` (first run: right‑click → Open).
+2. **Option B: Native**
+   ```bash
+   make install
+   make run
+   ```
 
-### Option B: Makefile
-```bash
-make install
-make run
-```
+### Linux (Docker)
+The easiest way to run the detector on Linux is via our specialized Docker images:
 
-The detector will automatically use the model in the Frigate communication and start communicating with Frigate. See [the Frigate documentation](https://deploy-preview-19787--frigate-docs.netlify.app/configuration/object_detectors#apple-silicon-detector) for instructions on setting up the detector.
+- **Nvidia GPUs**:
+  ```bash
+  make docker-build-cuda
+  docker run --rm --gpus all frigate-detector:cuda
+  ```
+- **Intel / Generic NPUs**:
+  ```bash
+  make docker-build-openvino
+  docker run --rm frigate-detector:openvino
+  ```
+- **AMD GPUs**:
+  ```bash
+  make docker-build-rocm
+  docker run --rm --device=/dev/kfd --device=/dev/dri frigate-detector:rocm
+  ```
+
+The detector will automatically use the model provided by Frigate and start communicating. See [the Frigate documentation](https://deploy-preview-19787--frigate-docs.netlify.app/configuration/object_detectors#apple-silicon-detector) for setup instructions.
 
 ## What's Included
 
 - **Model Loading**: Uses whatever model Frigate configures via its automatic model loading
-- **Apple Silicon Optimization**: Uses CoreML execution provider for maximum performance
+- **Hardware Optimization**: Automatically selects the best provider (CoreML, TensorRT, CUDA, ROCm, OpenVINO, or CPU)
 - **Frigate Integration**: Drop-in replacement for Frigate's built-in detectors
 - **Multiple Model Support**: YOLOv9, RF-DETR, D-FINE, and custom ONNX models
 
-## Supported Models
-
-The following models are supported by this detector:
-
-| Apple Silicon Chip | YOLOv9      | RF-DETR         | D-FINE        |
-| -------------------| ----------- | --------------- | ------------- |
-| M1                 |             |                 |               |
-| M2                 |             |                 |               |
-| M3                 | 320-t: 8 ms | 320-Nano: 80 ms | 640-s: 120 ms |
-| M4                 |             |                 |               |
-
-### Model Configuration
-The detector uses the model that Frigate configures:
-1. Frigate automatically loads and configures the model via ZMQ
-2. The detector receives model information from Frigate's automatic model loading
-3. No manual model selection required - works with Frigate's existing model management
-
-For implementation details, see the [detector README](detector/README.md).
-
-## Virtual Environment Management
-
-- The Makefile automatically manages `venv/` and uses `venv/bin/python3` and `venv/bin/pip3` directly
-- If you prefer to activate manually (optional): `source venv/bin/activate`
-- Recreate the environment: `make reinstall` (removes `venv/` and reinstalls)
-- Verify installation: `venv/bin/python3 -c "import onnxruntime; print('ONNX Runtime version:', onnxruntime.__version__)"`
-
 ## Advanced Configuration
-
-### Custom Model Selection
-```bash
-make run MODEL=/path/to/your/model.onnx
-```
 
 ### Custom Endpoints
 ```bash
-make run MODEL=/path/to/your/model.onnx ENDPOINT="tcp://*:5555"
+make run ENDPOINT="tcp://*:5555"
+```
+Or in Docker:
+```bash
+docker run -p 5555:5555 frigate-detector:cuda --endpoint tcp://*:5555
 ```
 
-### Custom Execution Providers
+### List Available Providers
+Check which hardware accelerators are detected:
 ```bash
-make run MODEL=/path/to/your/model.onnx PROVIDERS="CoreMLExecutionProvider CPUExecutionProvider"
+make run PROVIDERS="--list-providers"
 ```
 
-### Verbose Logging
+### Manual Provider Selection
 ```bash
-make run MODEL=/path/to/your/model.onnx VERBOSE=1
+make run PROVIDERS="CUDAExecutionProvider CPUExecutionProvider"
 ```
 
 ### Programmatic Usage
@@ -88,55 +82,35 @@ make run MODEL=/path/to/your/model.onnx VERBOSE=1
 ```python
 from detector.zmq_onnx_client import ZmqOnnxClient
 
-# Create client instance
+# Create client instance (AUTO detects best providers)
 client = ZmqOnnxClient(
     endpoint="tcp://*:5555",
-    model_path="/path/to/your/model.onnx",
-    providers=["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    model_path="/path/to/your/model.onnx"
 )
 
 # Start the server
 client.start_server()
 ```
 
-## Error Handling
-
-The client includes comprehensive error handling:
-- **ZMQ Errors**: Automatic socket reset and error response
-- **ONNX Errors**: Fallback to zero results with error logging
-- **Decoding Errors**: Graceful handling of malformed requests
-- **Resource Cleanup**: Proper cleanup on shutdown
-
 ## Performance
 
-- **CoreML Optimization**: Leverages Apple's Neural Engine when available
-- **Memory Management**: Efficient tensor handling with minimal copying
+- **M3/M4 Optimization**: Leverages Apple's Neural Engine (~8ms for YOLOv9-t)
+- **Nvidia TensorRT**: Optimized for low-latency inference on RTX/Tesla GPUs
+- **OpenVINO**: Balanced performance across Intel hardware and NPUs
 - **Async Processing**: Non-blocking ZMQ communication
-- **Batch Processing**: Ready for future batch inference support
 
 ## Troubleshooting
 
 ### Common Issues
-- **Permission Denied**: Ensure the IPC endpoint directory has proper permissions (`/tmp/cache/`)
-- **Model Loading Failed**: Verify ONNX model files are in the `models/` directory
-- **ZMQ Bind Failed**: Ensure the endpoint is not already in use by another process
-- **Package Not Found**: Run `make reinstall` to recreate the virtual environment
+- **GPU Not Detected**: Ensure the appropriate drivers (Nvidia/ROCm) are installed on the host and exposed to the container.
+- **Permission Denied**: For IPC endpoints, ensure proper permissions on `/tmp/cache/`.
+- **ZMQ Bind Failed**: Ensure the endpoint is not already in use.
 
 ### Debug Mode
-Enable verbose logging for detailed operation information:
+Enable verbose logging:
 ```bash
 make run VERBOSE=1
 ```
-
-## Integration with Frigate
-
-This detector works seamlessly with Frigate's ZMQ detector plugin:
-
-1. **Start the detector**: `make run`
-2. **Configure Frigate**: Add the ZMQ detector configuration (see Quick Start above)
-3. **Done**: Frigate automatically loads the model and the detector handles all inference requests
-
-For detailed implementation information, see the [detector documentation](detector/README.md).
 
 ## License
 
