@@ -11,6 +11,7 @@ An optimized object detection client for Frigate that leverages high-performance
   - **Linux (Nvidia)**: High-performance inference using CUDA and TensorRT
   - **Linux (AMD)**: GPU acceleration via ROCm and MIGraphX
   - **Linux (Intel/NPUs)**: Optimized for Intel CPUs, GPUs, and NPUs via OpenVINO
+  - **Linux (AMD Ryzen AI)**: Optimized for Ryzen AI NPUs (Phoenix, Strix) via Vitis-AI
 - **Smart Auto-Detection**: Automatically selects the best available execution provider for your hardware
 - **Error Handling**: Robust error handling with fallback to zero results
 - **Flexible Deployment**: Supports native execution or Docker containers
@@ -45,6 +46,12 @@ The easiest way to run the detector on Linux is via our specialized Docker image
   make docker-build-rocm
   docker run --rm --device=/dev/kfd --device=/dev/dri frigate-detector:rocm
   ```
+- **AMD Ryzen AI NPUs**:
+  ```bash
+  make docker-build-vitisai
+  docker run --rm --device=/dev/accel/accel0 frigate-detector:vitisai
+  ```
+  *Note: Ryzen AI support on Linux requires kernel 6.10+ and the `amdxdna` driver installed on the host.*
 
 The detector will automatically use the model provided by Frigate and start communicating. See [the Frigate documentation](https://deploy-preview-19787--frigate-docs.netlify.app/configuration/object_detectors#apple-silicon-detector) for setup instructions.
 
@@ -97,6 +104,7 @@ client.start_server()
 - **M3/M4 Optimization**: Leverages Apple's Neural Engine (~8ms for YOLOv9-t)
 - **Nvidia TensorRT**: Optimized for low-latency inference on RTX/Tesla GPUs
 - **OpenVINO**: Balanced performance across Intel hardware and NPUs
+- **Ryzen AI**: Specialized acceleration for AMD's XDNA architecture
 - **Async Processing**: Non-blocking ZMQ communication
 
 ## Troubleshooting

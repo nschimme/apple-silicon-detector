@@ -19,6 +19,7 @@ help:
 	@echo "  docker-build-cuda     - Build Docker image for Nvidia GPUs"
 	@echo "  docker-build-openvino - Build Docker image for Intel/Generic NPUs"
 	@echo "  docker-build-rocm     - Build Docker image for AMD GPUs"
+	@echo "  docker-build-vitisai  - Build Docker image for AMD Ryzen AI NPUs"
 	@echo "  docker-run            - Run the Docker container (requires DOCKER_IMAGE_NAME and DOCKER_TAG)"
 	@echo ""
 	@echo "Examples:"
@@ -51,6 +52,9 @@ docker-build-openvino:
 
 docker-build-rocm:
 	docker build -t $(DOCKER_IMAGE_NAME):rocm -f docker/Dockerfile.rocm .
+
+docker-build-vitisai:
+	docker build -t $(DOCKER_IMAGE_NAME):vitisai -f docker/Dockerfile.vitisai .
 
 docker-run:
 	docker run --rm -it $(DOCKER_IMAGE_NAME):$(DOCKER_TAG)

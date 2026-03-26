@@ -26,5 +26,5 @@ RUN sed -i 's/onnxruntime==/onnxruntime-rocm==/' requirements.txt && \
 
 COPY detector/ ./detector/
 
-ENTRYPOINT ["python3.11", "detector/zmq_onnx_client.py"]
+ENTRYPOINT ["python3", "detector/zmq_onnx_client.py"]
 CMD ["--endpoint", "tcp://*:5555", "--model", "AUTO"]

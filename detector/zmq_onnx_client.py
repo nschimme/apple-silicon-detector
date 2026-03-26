@@ -50,6 +50,7 @@ def get_best_providers() -> List[str]:
         "CUDAExecutionProvider",
         "ROCMExecutionProvider",
         "MIGraphXExecutionProvider",
+        "VitisAIExecutionProvider",
         "OpenVINOExecutionProvider",
     ]
 
@@ -173,6 +174,54 @@ class ZmqOnnxClient:
             logger.error(f"Failed to reset socket: {e}")
             raise
 
+    def _get_vitis_ai_options(self) -> dict:
+        """
+        Get options for VitisAIExecutionProvider, specifically for Ryzen AI.
+        """
+        options = {}
+        try:
+            # Check for NPU type on Linux
+            npu_type = "UNKNOWN"
+            if os.path.exists("/sys/class/accel"):
+                # Very basic heuristic for NPU detection on Linux via accel class
+                # On newer kernels, NPUs appear under /sys/class/accel/accel*
+                for dev in os.listdir("/sys/class/accel"):
+                    try:
+                        with open(f"/sys/class/accel/{dev}/device/device", "r") as f:
+                            dev_id = f.read().strip()
+                            if "1502" in dev_id:
+                                npu_type = "PHX"
+                            elif "17f0" in dev_id:
+                                npu_type = "STX"
+                    except Exception:
+                        continue
+
+            if npu_type == "PHX":
+                # Phoenix/Hawk Point
+                options = {
+                    "target": "X1",
+                    "xlnx_enable_py3_round": "0",
+                    # Default path if bundled in Docker
+                    "xclbin": "/opt/xclbins/1502_00/npu.dev.sbin",
+                }
+            elif npu_type == "STX":
+                # Strix Point
+                options = {
+                    "target": "STX",
+                    "xclbin": "/opt/xclbins/17f0_10/npu.dev.sbin",
+                }
+
+            # Allow environment variables to override
+            if "VITIS_AI_TARGET" in os.environ:
+                options["target"] = os.environ["VITIS_AI_TARGET"]
+            if "VITIS_AI_XCLBIN" in os.environ:
+                options["xclbin"] = os.environ["VITIS_AI_XCLBIN"]
+
+        except Exception as e:
+            logger.debug(f"Error detecting Vitis AI options: {e}")
+
+        return options
+
     def _create_onnx_session(
         self,
         model_path: str,
@@ -228,6 +277,8 @@ class ZmqOnnxClient:
                         "device_type": "AUTO",  # Automatically pick best available Intel device
                         "cache_dir": cache_dir,
                     }
+                elif provider == "VitisAIExecutionProvider":
+                    options = self._get_vitis_ai_options()
 
                 provider_options.append((provider, options))
 
